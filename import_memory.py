@@ -195,6 +195,34 @@ def _parse_chatgpt_json(data: list | dict) -> list[dict]:
     return turns
 
 
+def _parse_direct_message_json(data: list | dict) -> list[dict]:
+    """Parse direct message JSON: {role, content} or [{role, content}, ...]."""
+    messages = data if isinstance(data, list) else [data]
+    turns = []
+    for msg in messages:
+        if not isinstance(msg, dict):
+            continue
+        content = msg.get("content", msg.get("text", ""))
+        if isinstance(content, dict):
+            content = " ".join(str(p) for p in content.get("parts", []) if p)
+        elif isinstance(content, list):
+            content = " ".join(
+                str(p.get("text", p)) if isinstance(p, dict) else str(p)
+                for p in content
+                if p
+            )
+        elif not isinstance(content, str):
+            content = str(content)
+        if not content or not content.strip():
+            continue
+        role = msg.get("role", msg.get("sender", "user"))
+        ts = msg.get("timestamp", msg.get("created_at", msg.get("create_time", "")))
+        if isinstance(ts, (int, float)):
+            ts = datetime.fromtimestamp(ts).isoformat()
+        turns.append({"role": str(role or "user"), "content": content.strip(), "timestamp": str(ts)})
+    return turns
+
+
 def _parse_markdown(text: str) -> list[dict]:
     """Parse Markdown/plain text → [{role, content, timestamp}, ...]"""
     # Try to detect conversation patterns
@@ -260,7 +288,7 @@ def detect_and_parse(raw_content: str, filename: str = "") -> list[dict]:
                     return _parse_claude_json(data)
                 # Single conversation object with role/content messages
                 if "role" in sample and "content" in sample:
-                    return _parse_claude_json(data)
+                    return _parse_direct_message_json(data)
         except (json.JSONDecodeError, KeyError, IndexError, AttributeError, TypeError):
             pass
 

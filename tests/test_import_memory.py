@@ -83,6 +83,36 @@ def test_chatgpt_json_parser_skips_non_chat_roles():
     ]
 
 
+def test_direct_json_message_parser_supports_single_message():
+    raw = json.dumps(
+        {"role": "user", "content": "这是一条直接消息。", "timestamp": "2026-06-24T10:00:00"},
+        ensure_ascii=False,
+    )
+
+    turns = detect_and_parse(raw, "message.json")
+
+    assert turns == [
+        {"role": "user", "content": "这是一条直接消息。", "timestamp": "2026-06-24T10:00:00"}
+    ]
+
+
+def test_direct_json_message_parser_supports_message_array():
+    raw = json.dumps(
+        [
+            {"role": "human", "content": "第一句。"},
+            {"role": "assistant", "content": {"parts": ["第二句。"]}},
+        ],
+        ensure_ascii=False,
+    )
+
+    turns = detect_and_parse(raw, "messages.json")
+
+    assert [(turn["role"], turn["content"]) for turn in turns] == [
+        ("human", "第一句。"),
+        ("assistant", "第二句。"),
+    ]
+
+
 def test_oversized_markdown_turn_is_split_into_multiple_chunks():
     long_line = "这是一段很长的导入文本。" * 700
     turns = detect_and_parse("用户：" + long_line, "chat.md")

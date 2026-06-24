@@ -2579,6 +2579,7 @@
       </div>
       <div style="margin-top:12px;">
         <button id="import-pause-btn" onclick="pauseImport()" style="display:none;">⏸ 暂停</button>
+        <button id="import-resume-btn" onclick="resumeImport()" style="display:none;">▶ 继续</button>
       </div>
     </div>
 
@@ -6347,17 +6348,28 @@ fileInput.addEventListener('change', () => {
   startImport(selectedFile);
 });
 
+let lastImportStatus = null;
+
+function canResumeImportStatus(s) {
+  return s && s.status === 'paused' && Number(s.processed || 0) < Number(s.total_chunks || 0);
+}
+
 async function startImport(file) {
   const preserveRaw = document.getElementById('import-preserve-raw').checked;
+  const resume = canResumeImportStatus(lastImportStatus)
+    ? confirm('从上次进度继续导入这个文件？\n确定=继续，取消=重新开始。')
+    : false;
   const fd = new FormData();
   fd.append('file', file);
   try {
-    const res = await authFetch(BASE + '/api/import/upload?preserve_raw=' + (preserveRaw ? '1' : '0'), { method: 'POST', body: fd });
+    const qs = '?preserve_raw=' + (preserveRaw ? '1' : '0') + '&resume=' + (resume ? '1' : '0');
+    const res = await authFetch(BASE + '/api/import/upload' + qs, { method: 'POST', body: fd });
     if (!res) return;
     const data = await res.json();
     if (data.error) { alert('导入失败: ' + data.error); return; }
     document.getElementById('import-progress').style.display = '';
     document.getElementById('import-pause-btn').style.display = '';
+    document.getElementById('import-resume-btn').style.display = 'none';
     pollImportStatus();
   } catch (e) { alert('上传失败: ' + e.message); }
 }
@@ -6383,6 +6395,7 @@ async function pollImportStatus() {
 }
 
 function updateImportUI(s) {
+  lastImportStatus = s;
   const prog = document.getElementById('import-progress');
   if (s.status === 'idle') { prog.style.display = 'none'; return; }
   prog.style.display = '';
@@ -6397,6 +6410,7 @@ function updateImportUI(s) {
   const statusMap = { running: '⏳ 导入中…', paused: '⏸ 已暂停', completed: '✅ 完成', error: '❌ 出错' };
   document.getElementById('import-status-text').textContent = statusMap[s.status] || s.status;
   document.getElementById('import-pause-btn').style.display = s.status === 'running' ? '' : 'none';
+  document.getElementById('import-resume-btn').style.display = canResumeImportStatus(s) ? '' : 'none';
   if (s.status !== 'running') clearInterval(importPollTimer);
   const errDiv = document.getElementById('import-errors');
   if (s.errors && s.errors.length) {
@@ -6406,7 +6420,31 @@ function updateImportUI(s) {
 }
 
 async function pauseImport() {
-  try { await authFetch(BASE + '/api/import/pause', { method: 'POST' }); } catch(e) {}
+  try {
+    await authFetch(BASE + '/api/import/pause', { method: 'POST' });
+    pollImportStatus();
+  } catch(e) {}
+}
+
+async function resumeImport() {
+  const preserveRaw = document.getElementById('import-preserve-raw').checked;
+  try {
+    const res = await authFetch(BASE + '/api/import/resume?preserve_raw=' + (preserveRaw ? '1' : '0'), { method: 'POST' });
+    if (!res) return;
+    const data = await res.json();
+    if (data.error) {
+      if (data.needs_upload) {
+        alert('服务重启后需要重新选择同一个文件才能继续；也可以取消继续，重新开始导入。');
+      } else {
+        alert('继续失败: ' + data.error);
+      }
+      pollImportStatus();
+      return;
+    }
+    document.getElementById('import-pause-btn').style.display = '';
+    document.getElementById('import-resume-btn').style.display = 'none';
+    pollImportStatus();
+  } catch(e) { alert('继续失败: ' + e.message); }
 }
 
 async function loadImportResults() {

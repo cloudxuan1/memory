@@ -28,6 +28,7 @@ from typing import Optional
 import jieba
 from rapidfuzz import fuzz
 
+from identity import identity_names, render_identity_template
 from utils import bucket_text_for_embedding, count_tokens_approx, now_iso, strip_affect_anchor
 
 logger = logging.getLogger("ombre_brain.import")
@@ -619,6 +620,11 @@ class ImportState:
 
 IMPORT_EXTRACT_PROMPT = """你是一个对话记忆提取专家。从以下对话片段中提取值得长期记住的信息。
 
+身份称呼：
+- 用户本人请称为「{user_display_name}」，不要写成“用户”。
+- AI 助手请称为「{ai_name}」，不要写成“AI”或“助手”。
+- 看到「{user_name}」或「{user_aliases_text}」等称呼时，都按用户本人理解。
+
 提取规则：
 1. 提取用户的事实、偏好、习惯、重要事件、情感时刻
 2. 同一话题的零散信息整合为一条记忆
@@ -721,6 +727,7 @@ class ImportEngine:
             True,
         )
         self.state = ImportState(config.get("state_dir") or config["buckets_dir"])
+        self.identity = identity_names(config)
         self._paused = False
         self._running = False
         self._chunks: list[dict] = []
@@ -736,7 +743,44 @@ class ImportEngine:
 
     def get_status(self) -> dict:
         """Get current import status."""
+        if not self._running:
+            self.state.load()
+            if self.state.data.get("status") == "running":
+                self.state.data["status"] = "paused"
+                self.state.save()
         return self.state.to_dict()
+
+    @property
+    def has_resume_chunks(self) -> bool:
+        return bool(self._chunks)
+
+    async def resume(self, preserve_raw: bool = False) -> dict:
+        """Resume a paused import while the parsed chunks are still in memory."""
+        if self._running:
+            return {"error": "Import already running"}
+
+        if not self.state.load() or not self.state.can_resume:
+            return {"error": "No paused import to resume"}
+
+        if not self._chunks:
+            return {
+                "error": "Import source is no longer in memory. Upload the same file again to resume.",
+                "needs_upload": True,
+            }
+
+        self._running = True
+        self._paused = False
+        self.state.data["status"] = "running"
+        self.state.save()
+
+        try:
+            return await self._process_chunks(preserve_raw)
+        except Exception as e:
+            self.state.data["status"] = "error"
+            self.state.data["errors"].append(str(e))
+            self.state.save()
+            self._running = False
+            raise
 
     async def start(
         self,
@@ -897,7 +941,7 @@ class ImportEngine:
         response = await self.dehydrator.client.chat.completions.create(
             model=self.dehydrator.model,
             messages=[
-                {"role": "system", "content": IMPORT_EXTRACT_PROMPT},
+                {"role": "system", "content": render_identity_template(IMPORT_EXTRACT_PROMPT, self.identity)},
                 {"role": "user", "content": user_content},
             ],
             max_tokens=4096,

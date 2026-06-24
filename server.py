@@ -10773,6 +10773,38 @@ async def api_import_pause(request):
     return JSONResponse({"status": "pause_requested"})
 
 
+@mcp.custom_route("/api/import/resume", methods=["POST"])
+async def api_import_resume(request):
+    """Resume a paused import if its parsed chunks are still in memory."""
+    from starlette.responses import JSONResponse
+    err = _require_dashboard_auth(request)
+    if err:
+        return err
+    if import_engine.is_running:
+        return JSONResponse({"error": "Import already running"}, status_code=409)
+
+    status = import_engine.get_status()
+    if status.get("status") != "paused" or status.get("processed", 0) >= status.get("total_chunks", 0):
+        return JSONResponse({"error": "No paused import to resume"}, status_code=400)
+
+    if not import_engine.has_resume_chunks:
+        return JSONResponse({
+            "error": "Import source is no longer in memory. Upload the same file again to resume.",
+            "needs_upload": True,
+        }, status_code=409)
+
+    preserve_raw = request.query_params.get("preserve_raw", "").lower() in ("1", "true")
+
+    async def _run_resume():
+        try:
+            await import_engine.resume(preserve_raw)
+        except Exception as e:
+            logger.error(f"Import resume failed: {e}")
+
+    asyncio.create_task(_run_resume())
+    return JSONResponse({"status": "resumed"})
+
+
 @mcp.custom_route("/api/import/patterns", methods=["GET"])
 async def api_import_patterns(request):
     """Detect high-frequency patterns after import."""

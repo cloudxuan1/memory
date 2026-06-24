@@ -157,6 +157,24 @@ def test_import_extraction_keeps_output_budget_and_does_not_truncate_input():
     assert DummyClient.kwargs["messages"][1]["content"] == long_chunk
 
 
+def test_import_mark_starting_persists_running_status(tmp_path):
+    engine = ImportEngine(
+        {"buckets_dir": str(tmp_path)},
+        bucket_mgr=None,
+        dehydrator=DummyDehydrator(),
+        embedding_engine=None,
+    )
+
+    status = engine.mark_starting("用户：准备导入\n助手：开始。", "chat.md")
+
+    assert status["status"] == "running"
+    assert status["source_file"] == "chat.md"
+    assert status["total_chunks"] == 0
+    assert status["processed"] == 0
+    assert status["errors"] == []
+    assert engine.get_status()["status"] == "running"
+
+
 @pytest.mark.asyncio
 async def test_import_dedupes_existing_bucket_by_content(test_config, bucket_mgr):
     content = "小雨决定周末去杭州参加朋友婚礼，需要提前买高铁票并准备蓝色连衣裙。"

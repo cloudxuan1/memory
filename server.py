@@ -10734,10 +10734,14 @@ async def api_import_upload(request):
     except Exception as e:
         return JSONResponse({"error": f"Failed to read upload: {e}"}, status_code=400)
 
+    import_engine.mark_starting(raw_content, filename)
+
     # Start import in background
     async def _run_import():
         try:
-            await import_engine.start(raw_content, filename, preserve_raw, resume)
+            result = await import_engine.start(raw_content, filename, preserve_raw, resume)
+            if isinstance(result, dict) and result.get("error"):
+                logger.warning(f"Import did not start: {result.get('error')}")
         except Exception as e:
             logger.error(f"Import failed: {e}")
 

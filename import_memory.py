@@ -745,7 +745,7 @@ class ImportEngine:
         """Get current import status."""
         if not self._running:
             self.state.load()
-            if self.state.data.get("status") == "running":
+            if self.state.data.get("status") == "running" and self.state.data.get("total_chunks", 0) > 0:
                 self.state.data["status"] = "paused"
                 self.state.save()
         return self.state.to_dict()
@@ -753,6 +753,34 @@ class ImportEngine:
     @property
     def has_resume_chunks(self) -> bool:
         return bool(self._chunks)
+
+    def mark_starting(self, raw_content: str, filename: str = "") -> dict:
+        source_hash = hashlib.sha256(raw_content.encode()).hexdigest()[:16]
+        self.state.data.update({
+            "source_file": filename,
+            "source_hash": source_hash,
+            "total_chunks": 0,
+            "processed": 0,
+            "errors": [],
+            "status": "running",
+            "started_at": now_iso(),
+        })
+        self.state.save()
+        return self.state.to_dict()
+
+    def _mark_start_error(self, source_file: str, source_hash: str, error: str) -> dict:
+        self.state.data.update({
+            "source_file": source_file,
+            "source_hash": source_hash,
+            "total_chunks": 0,
+            "processed": 0,
+            "errors": [error],
+            "status": "error",
+            "started_at": self.state.data.get("started_at") or now_iso(),
+        })
+        self.state.save()
+        self._running = False
+        return {"error": error}
 
     async def resume(self, preserve_raw: bool = False) -> dict:
         """Resume a paused import while the parsed chunks are still in memory."""
@@ -802,6 +830,7 @@ class ImportEngine:
 
         try:
             source_hash = hashlib.sha256(raw_content.encode()).hexdigest()[:16]
+            self.mark_starting(raw_content, filename)
 
             # Check for resume
             if resume and self.state.load() and self.state.can_resume:
@@ -823,8 +852,7 @@ class ImportEngine:
             # Fresh import
             turns = detect_and_parse(raw_content, filename)
             if not turns:
-                self._running = False
-                return {"error": "No conversation turns found in file"}
+                return self._mark_start_error(filename, source_hash, "No conversation turns found in file")
 
             self._chunks = self._attach_source_metadata(
                 chunk_turns(turns, target_tokens=self.chunk_target_tokens),
@@ -832,8 +860,7 @@ class ImportEngine:
                 source_hash,
             )
             if not self._chunks:
-                self._running = False
-                return {"error": "No processable chunks after splitting"}
+                return self._mark_start_error(filename, source_hash, "No processable chunks after splitting")
 
             self.state.reset(filename, source_hash, len(self._chunks))
             self.state.save()
